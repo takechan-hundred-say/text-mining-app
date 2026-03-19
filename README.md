@@ -22,7 +22,8 @@ StreamlitとローカルLLMを使ったテキストマイニングアプリ
 * アプリを起動します。
   * bash streamlit run app.py
 
-📄 ライセンス 本プロジェクトは MIT License のもとで公開されています。 使用しているサードパーティ製ライブラリのライセンスについては ThirdPartyNotices.txt をご参照ください。
+##📄 ライセンス 
+本プロジェクトは MIT License のもとで公開されています。 使用しているサードパーティ製ライブラリのライセンスについては ThirdPartyNotices.txt をご参照ください。
 
 ## ✍️ 開発者
 - **氏名**: 坂本　毅啓
