@@ -1,0 +1,28 @@
+This application uses the following open-source software and libraries.
+We are deeply grateful to the developers and contributors of these projects.
+
+■ MIT License
+- wordcloud
+- python-docx
+- openpyxl
+- tabulate
+- plotly
+- XlsxWriter
+- openai
+- asari
+
+■ BSD License (BSD 3-Clause / BSD 2-Clause)
+- pandas
+- networkx
+- pypdf
+- pyvis
+- scikit-learn
+
+■ Apache License 2.0
+- streamlit
+- janome (Includes dictionary data under its respective licenses)
+
+■ Matplotlib License (PSF-based)
+- matplotlib
+
+For the full license texts of each library, please visit their respective official repositories or PyPI pages.

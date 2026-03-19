@@ -1,0 +1,17 @@
+streamlit
+pandas
+matplotlib
+wordcloud
+networkx
+janome
+python-docx
+pypdf
+pyvis
+scikit-learn
+asari
+openpyxl
+tabulate
+plotly
+xlsxwriter
+scikit-learn
+openai
