@@ -23,4 +23,11 @@ StreamlitとローカルLLMを使ったテキストマイニングアプリ
 
 📄 ライセンス 本プロジェクトは MIT License のもとで公開されています。 使用しているサードパーティ製ライブラリのライセンスについては ThirdPartyNotices.txt をご参照ください。
 
-✍️ 開発者 坂本　毅啓（Takeharu Sakamoto）　北九州市立大学(The University of Kitakyushu)
+## ✍️ 開発者 (Author)
+- **氏名**: 坂本　毅啓
+- **所属**: 北九州市立大学　地域創生学群
+- **連絡先**: Researchmap https://researchmap.jp/s-takeharu
+
+## 📝 引用について (Citation)
+研究や論文で本ツールを使用された場合は、以下のように引用していただけると幸いです。
+> 坂本毅啓 (2026). 計量テキスト分析ツール (text-mining-app). GitHub repository: https://github.com/takechan-hundred-say/text-mining-app.git<img width="489" height="26" alt="image" src="https://github.com/user-attachments/assets/c078da73-d904-4a9e-bbeb-d4a918258ba9" />
