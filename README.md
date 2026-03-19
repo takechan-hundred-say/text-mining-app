@@ -30,4 +30,4 @@ StreamlitとローカルLLMを使ったテキストマイニングアプリ
 
 ## 📝 引用について (Citation)
 研究や論文で本ツールを使用された場合は、以下のように引用していただけると幸いです。
-> 坂本毅啓 (2026). 計量テキスト分析ツール (text-mining-app). GitHub repository: https://github.com/takechan-hundred-say/text-mining-app.git<img width="489" height="26" alt="image" src="https://github.com/user-attachments/assets/c078da73-d904-4a9e-bbeb-d4a918258ba9" />
+> 坂本毅啓 (2026). 計量テキスト分析ツール (text-mining-app). GitHub repository: https://github.com/takechan-hundred-say/text-mining-app.git
