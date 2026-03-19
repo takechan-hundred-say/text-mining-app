@@ -1,7 +1,7 @@
 # text-mining-app
 StreamlitとローカルLLMを使ったテキストマイニングアプリ
 
-# 計量テキスト分析ツール (Quantitative Text Analysis Tool)
+# 計量テキスト分析ツール
 誰でも簡単にテキストデータを分析・可視化できる、Python (Streamlit) ベースのローカルアプリケーションです。
 
 ## 🌟 主な機能
@@ -19,15 +19,16 @@ StreamlitとローカルLLMを使ったテキストマイニングアプリ
 * リポジトリをクローンまたはダウンロードします。
 * 必要なライブラリをインストールします。
   * pip install -r requirements.txt  
-* アプリを起動します。 bash streamlit run app.py
+* アプリを起動します。
+  * bash streamlit run app.py
 
 📄 ライセンス 本プロジェクトは MIT License のもとで公開されています。 使用しているサードパーティ製ライブラリのライセンスについては ThirdPartyNotices.txt をご参照ください。
 
-## ✍️ 開発者 (Author)
+## ✍️ 開発者
 - **氏名**: 坂本　毅啓
 - **所属**: 北九州市立大学　地域創生学群
 - **連絡先**: Researchmap https://researchmap.jp/s-takeharu
 
-## 📝 引用について (Citation)
+## 📝 引用について
 研究や論文で本ツールを使用された場合は、以下のように引用していただけると幸いです。
 > 坂本毅啓 (2026). 計量テキスト分析ツール (text-mining-app). GitHub repository: https://github.com/takechan-hundred-say/text-mining-app.git
