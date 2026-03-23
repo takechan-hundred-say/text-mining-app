@@ -14,7 +14,10 @@ import networkx as nx
 from itertools import combinations
 from pyvis.network import Network
 import streamlit.components.v1 as components
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer # CountVectorizerを追記
+from scipy.cluster.hierarchy import linkage, dendrogram # この行を新規追加
+from sklearn.cluster import KMeans           # ← この行を追加
+from sklearn.decomposition import PCA        # ← この行を追加
 from asari.api import Sonar
 import plotly.express as px
 import zipfile
@@ -443,6 +446,123 @@ def draw_sentiment_analysis(text):
         ax_line.spines['right'].set_visible(False)
         ax_line.spines['top'].set_visible(False)
         st.pyplot(fig_line)
+
+def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords):
+    st.write("### 🌳/📍 クラスター分析（単語のグループ化）")
+    st.write("単語同士が「どのくらい同じ文脈で使われているか」を計算し、グループ化します。")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        unit_option = st.selectbox(
+            "分析単位（テキストの区切り方）",
+            ["段落単位（改行）", "一文単位（句点）", "ファイル全体", "単語単位（10語区切り）"]
+        )
+    with col2:
+        top_n = st.slider("分析に含める上位単語数", min_value=10, max_value=100, value=30, step=5)
+    with col3:
+        plot_type = st.radio("グラフの種類", ["樹形図（階層型）", "散布図（K-means）"])
+        
+    if plot_type == "散布図（K-means）":
+        n_clusters = st.number_input("散布図のクラスター（グループ）数", min_value=2, max_value=10, value=3)
+
+    with st.spinner("テキストを分割し、クラスターを計算中..."):
+        # 1. 分析単位の分割と単語抽出
+        t = Tokenizer()
+        docs_words = []
+        
+        # 単語単位（10語区切り）の場合は、先に全単語を抽出してチャンク化する
+        if unit_option == "単語単位（10語区切り）":
+            all_valid_words = []
+            for token in t.tokenize(text):
+                pos = token.part_of_speech.split(',')[0]
+                base_form = token.base_form if token.base_form != '*' else token.surface
+                if pos in target_pos:
+                    base_form = synonym_dict.get(base_form, base_form)
+                    if base_form not in stopwords:
+                        all_valid_words.append(base_form)
+            # 10語ずつに分割
+            for i in range(0, len(all_valid_words), 10):
+                chunk = all_valid_words[i:i+10]
+                if len(chunk) > 0:
+                    docs_words.append(" ".join(chunk))
+        else:
+            # それ以外の分割単位
+            if unit_option == "ファイル全体":
+                docs = [text]
+            elif unit_option == "段落単位（改行）":
+                docs = [p.strip() for p in text.split('\n') if len(p.strip()) > 0]
+            elif unit_option == "一文単位（句点）":
+                docs = [s.strip() + '。' for s in text.replace('\n', '。').split('。') if len(s.strip()) > 0]
+                
+            for doc in docs:
+                words = []
+                for token in t.tokenize(doc):
+                    pos = token.part_of_speech.split(',')[0]
+                    base_form = token.base_form if token.base_form != '*' else token.surface
+                    if pos in target_pos:
+                        base_form = synonym_dict.get(base_form, base_form)
+                        if base_form not in stopwords:
+                            words.append(base_form)
+                if len(words) > 0:
+                    docs_words.append(" ".join(words))
+
+        if len(docs_words) < 2:
+            st.warning("分割された文書が少なすぎます。別の分析単位を選択してください。")
+            return
+
+        # 2. 上位単語の絞り込みとベクトル化（出現回数行列の作成）
+        top_words = df_result['語句'].head(top_n).tolist()
+        vectorizer = CountVectorizer(vocabulary=top_words)
+        X = vectorizer.fit_transform(docs_words).toarray()
+        
+        # 単語×文書の行列に転置
+        X_T = X.T
+        valid_indices = X_T.sum(axis=1) > 0
+        X_T_valid = X_T[valid_indices]
+        valid_words = [top_words[i] for i, valid in enumerate(valid_indices) if valid]
+
+        if len(valid_words) < n_clusters if plot_type == "散布図（K-means）" else len(valid_words) < 2:
+            st.warning("有効な単語数が不足しています。抽出条件を見直してください。")
+            return
+
+        # 3. グラフの描画
+        fig_cluster, ax_cluster = plt.subplots(figsize=(10, 6))
+
+        if plot_type == "樹形図（階層型）":
+            # 階層的クラスタリング（ウォード法）
+            Z = linkage(X_T_valid, method='ward', metric='euclidean')
+            dendrogram(Z, labels=valid_words, orientation='right', ax=ax_cluster, leaf_font_size=12)
+            ax_cluster.set_title(f"単語の樹形図（{unit_option} / 上位{top_n}語）", fontsize=14)
+            ax_cluster.set_xlabel("距離（非類似度）")
+            
+        else:
+            # 非階層的クラスタリング（K-means法）と主成分分析（PCA）
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            clusters = kmeans.fit_predict(X_T_valid)
+            
+            # 多次元のデータを2次元に圧縮（マッピング）
+            pca = PCA(n_components=2, random_state=42)
+            coords = pca.fit_transform(X_T_valid)
+            
+            # 散布図の描画
+            scatter = ax_cluster.scatter(coords[:, 0], coords[:, 1], c=clusters, cmap='tab10', alpha=0.7, s=150)
+            
+            # 単語ラベルの付与
+            for i, word in enumerate(valid_words):
+                ax_cluster.annotate(word, (coords[i, 0], coords[i, 1]), fontsize=11, alpha=0.9, 
+                                    xytext=(5, 5), textcoords='offset points')
+                
+            ax_cluster.set_title(f"単語のクラスター散布図（PCA + K-means / {n_clusters}グループ）", fontsize=14)
+            ax_cluster.set_xlabel("第1主成分 (PC1)")
+            ax_cluster.set_ylabel("第2主成分 (PC2)")
+            ax_cluster.grid(True, linestyle='--', alpha=0.5)
+
+        st.pyplot(fig_cluster)
+        
+        # 4. 画像保存機能
+        buf_cluster = io.BytesIO()
+        fig_cluster.savefig(buf_cluster, format="png", dpi=300, bbox_inches='tight')
+        st.download_button("🖼️ グラフをPNGで保存", data=buf_cluster.getvalue(), file_name=f"cluster_{'dendrogram' if plot_type == '樹形図（階層型）' else 'scatter'}.png", mime="image/png")
 
 def draw_kwic(text, df_result):
     st.write("### 🔍 文脈抽出（KWIC）")
@@ -959,8 +1079,8 @@ if st.session_state.get('text_ready', False):
                         # ==========================================
                         st.markdown("---")
                         st.header("2. 応用項目")
-                        tab8, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-                            "🔗 N-gram", "☁️ ワードクラウド", "🕸️ 共起ネットワーク", "🌟 TF-IDF", "😊 感情分析", "🔍 KWIC"
+                        tab8, tab3, tab4, tab5, tab6, tab7, tab_cluster = st.tabs([
+                            "🔗 N-gram", "☁️ ワードクラウド", "🕸️ 共起ネットワーク", "🌟 TF-IDF", "😊 感情分析", "🔍 KWIC", "🌳 クラスター分析"
                         ])
 
                         with tab8:
@@ -981,7 +1101,15 @@ if st.session_state.get('text_ready', False):
                             
                         with tab7:
                             draw_kwic(text, df_result)
+                        
+                        with tab_cluster:
+                            # stopwordsの設定（他のタブと同じように取得）
+                            stopwords = set([w.strip() for w in stop_words_text.replace('\n', ',').split(',') if w.strip()])
+                            if stop_words_content:
+                                stopwords.update([w.strip() for w in stop_words_content.replace('\n', ',').split(',') if w.strip()])
                             
+                            draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords)    
+                        
                         # ==========================================
                         # 3. AI分析（ローカルLLM連携）
                         # ==========================================
