@@ -13,5 +13,5 @@ openpyxl
 tabulate
 plotly
 xlsxwriter
-scikit-learn
 openai
+scipy
