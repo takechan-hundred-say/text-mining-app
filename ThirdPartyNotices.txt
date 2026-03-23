@@ -17,6 +17,7 @@ We are deeply grateful to the developers and contributors of these projects.
 - pypdf
 - pyvis
 - scikit-learn
+- scipy
 
 ■ Apache License 2.0
 - streamlit
