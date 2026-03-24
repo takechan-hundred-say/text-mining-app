@@ -28,6 +28,38 @@ import signal
 # Windows標準のフォント（メイリオ）を指定
 plt.rcParams['font.family'] = 'Meiryo'
 
+@st.cache_data
+def load_polarity_dict_tohoku():
+    """
+    東北大学・日本語評価極性辞書（名詞編）を読み込む
+    pn.csv.m3.120408.trim をdicフォルダに置いて使用
+    形式: 見出し語\t極性(p/n/e/?p?n等)\t意味カテゴリ
+    """
+    import os
+    dict_path = os.path.join('dic', 'pn.csv.m3.120408.trim')
+    polarity_dict = {}
+    
+    if not os.path.exists(dict_path):
+        return None  # ファイルがなければNoneを返す
+    
+    try:
+        df_pncsv = pd.read_csv(
+            dict_path,
+            sep="\t",
+            names=["term", "sentiment", "semantic_category"],
+            encoding="utf-8"
+        )
+        # 正規化（全角→半角）して辞書に格納
+        import unicodedata
+        for _, row in df_pncsv.iterrows():
+            term_nfkc = unicodedata.normalize('NFKC', str(row['term']))
+            polarity_dict[term_nfkc] = str(row['sentiment'])
+    except Exception as e:
+        st.error(f"東北大学極性辞書の読み込みに失敗しました: {e}")
+        return None
+    
+    return polarity_dict
+
 def load_synonym_dict(uploaded_csv):
     synonym_dict = {}
     if uploaded_csv is not None:
@@ -358,94 +390,157 @@ def draw_tfidf_chart(sentences_words):
 
 def draw_sentiment_analysis(text):
     st.write("### 感情分析（ネガポジ判定）")
-    st.write("文章中の各文がポジティブ（肯定的）かネガティブ（否定的）かをAIモデルで判定します。")
-    
+
+    # ★辞書の選択UI
+    method = st.radio(
+        "感情分析の方式を選択してください",
+        ["🤖 AIモデル方式（asari）", "📖 辞書方式（東北大学・日本語評価極性辞書）"],
+        horizontal=True
+    )
+
     sentences = [s.strip() + '。' for s in text.replace('\n', '。').split('。') if s.strip()]
-    
     if not sentences:
         st.warning("分析する文がありません。")
         return
 
-    try:
-        sonar = Sonar()
-    except Exception as e:
-        st.error(f"asariの起動に失敗しました: {e}")
-        return
-    
-    results = []
-    for sentence in sentences:
-        if len(sentence) <= 1:
-            continue
-            
-        res = sonar.ping(sentence)
-        top_class = res['top_class']
-        
-        pos_prob = next(c['confidence'] for c in res['classes'] if c['class_name'] == 'positive')
-        neg_prob = next(c['confidence'] for c in res['classes'] if c['class_name'] == 'negative')
-        
-        trend_score = pos_prob - neg_prob
-        
-        if abs(trend_score) < 0.2:
-            label = "😐 ニュートラル"
-            score = 0.5 
-        elif top_class == 'positive':
-            label = "😊 ポジティブ"
-            score = pos_prob
-        else:
-            label = "😞 ネガティブ"
-            score = -neg_prob
-            
-        results.append({
-            "文": sentence,
-            "判定": label,
-            "スコア(確信度)": round(score, 3),
-            "推移スコア": trend_score 
-        })
-        
+    # =============================================
+    # 方式A: 既存のasari（AIモデル）方式
+    # =============================================
+    if method == "🤖 AIモデル方式（asari）":
+        try:
+            sonar = Sonar()
+        except Exception as e:
+            st.error(f"asariの起動に失敗しました: {e}")
+            return
+
+        results = []
+        for sentence in sentences:
+            if len(sentence) <= 1:
+                continue
+            res = sonar.ping(sentence)
+            top_class = res['top_class']
+            pos_prob = next(c['confidence'] for c in res['classes'] if c['class_name'] == 'positive')
+            neg_prob = next(c['confidence'] for c in res['classes'] if c['class_name'] == 'negative')
+            trend_score = pos_prob - neg_prob
+
+            if abs(trend_score) < 0.2:
+                label = "😐 ニュートラル"
+                score = 0.5
+            elif top_class == 'positive':
+                label = "😊 ポジティブ"
+                score = pos_prob
+            else:
+                label = "😞 ネガティブ"
+                score = -neg_prob
+
+            results.append({
+                "文": sentence,
+                "判定": label,
+                "スコア(確信度)": round(score, 3),
+                "推移スコア": trend_score
+            })
+
+    # =============================================
+    # 方式B: 東北大学・日本語評価極性辞書方式
+    # =============================================
+    else:
+        polarity_dict = load_polarity_dict_tohoku()
+        if polarity_dict is None:
+            st.error(
+                "辞書ファイルが見つかりません。\n"
+                "東北大学のサイトから `pn.csv.m3.120408.trim` をダウンロードし、"
+                "アプリフォルダ内の `dic` フォルダに配置してください。\n"
+                "https://www.cl.ecei.tohoku.ac.jp/Open_Resources-Japanese_Sentiment_Polarity_Dictionary.html"
+            )
+            return
+
+        # 極性マッピング（辞書の記号→スコア）
+        # p=ポジティブ, n=ネガティブ, e=ニュートラル, ?p?n=曖昧
+        polarity_score_map = {
+            "p": 1.0, "?p": 0.5, "?p?e": 0.3,
+            "e": 0.0,
+            "n": -1.0, "?n": -0.5, "?p?n": 0.0,
+            "a": 0.0, "o": 0.0
+        }
+
+        tokenizer = Tokenizer()
+        results = []
+        for sentence in sentences:
+            if len(sentence) <= 1:
+                continue
+
+            scores = []
+            hit_words = []
+            for token in tokenizer.tokenize(sentence):
+                import unicodedata
+                surface = unicodedata.normalize('NFKC', token.surface)
+                base = unicodedata.normalize('NFKC', token.base_form if token.base_form != '*' else token.surface)
+
+                # 表層形・基本形の両方で辞書を検索
+                for w in [surface, base]:
+                    if w in polarity_dict:
+                        pol = polarity_dict[w]
+                        sc = polarity_score_map.get(pol, 0.0)
+                        scores.append(sc)
+                        hit_words.append(f"{w}({pol})")
+                        break
+
+            if scores:
+                trend_score = sum(scores) / len(scores)
+            else:
+                trend_score = 0.0
+
+            if trend_score > 0.1:
+                label = "😊 ポジティブ"
+            elif trend_score < -0.1:
+                label = "😞 ネガティブ"
+            else:
+                label = "😐 ニュートラル"
+
+            results.append({
+                "文": sentence,
+                "判定": label,
+                "スコア": round(trend_score, 3),
+                "推移スコア": trend_score,
+                "ヒット語句": ", ".join(hit_words) if hit_words else "（該当なし）"
+            })
+
+    # =============================================
+    # 共通：結果の表示
+    # =============================================
     df_sentiment = pd.DataFrame(results)
-    
     if df_sentiment.empty:
         st.info("判定できる文がありませんでした。")
         return
-        
+
     pos_count = len(df_sentiment[df_sentiment["判定"] == "😊 ポジティブ"])
     neg_count = len(df_sentiment[df_sentiment["判定"] == "😞 ネガティブ"])
     neu_count = len(df_sentiment[df_sentiment["判定"] == "😐 ニュートラル"])
-    
+
     col1, col2, col3 = st.columns(3)
     col1.metric("ポジティブな文", f"{pos_count}件")
     col2.metric("ネガティブな文", f"{neg_count}件")
     col3.metric("ニュートラルな文", f"{neu_count}件")
-    
-    fig, ax = plt.subplots(figsize=(6, 4))
-    labels = ['ポジティブ', 'ネガティブ', 'ニュートラル']
-    sizes = [pos_count, neg_count, neu_count]
-    colors = ['#ff9999', '#66b3ff', '#d3d3d3']
-    
-    if sum(sizes) > 0:
-        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-        ax.axis('equal')
-        
-        col_chart, col_table = st.columns([1, 1])
-        with col_chart:
-            st.pyplot(fig)
-        with col_table:
-            st.dataframe(df_sentiment[["文", "判定", "スコア(確信度)"]], height=300)
 
-        # --- ここから折れ線グラフ（感情の推移）を追記 ---
-        st.markdown("---")
-        st.write("#### 📈 文章の展開に伴う感情の推移")
-        st.write("横軸が文章の進行（最初から最後）、縦軸が感情のスコア（上がポジティブ、下がネガティブ）を示します。")
-        
-        fig_line, ax_line = plt.subplots(figsize=(10, 4))
-        # df_sentimentにはすでに "推移スコア" が計算されて入っています
-        ax_line.plot(df_sentiment.index + 1, df_sentiment["推移スコア"], marker='o', linestyle='-', color='#9b59b6')
-        ax_line.axhline(0, color='gray', linestyle='--', alpha=0.5) # 基準線（ニュートラル）
-        ax_line.set_xlabel("文の順番")
-        ax_line.set_ylabel("感情スコア (←ネガティブ / ポジティブ→)")
-        ax_line.spines['right'].set_visible(False)
-        ax_line.spines['top'].set_visible(False)
-        st.pyplot(fig_line)
+    st.dataframe(df_sentiment, use_container_width=True)
+
+    # CSVダウンロード
+    csv = df_sentiment.to_csv(index=False).encode('utf-8-sig')
+    st.download_button("📥 感情分析結果（CSV）をダウンロード", data=csv,
+                       file_name="sentiment_result.csv", mime="text/csv")
+
+    # 折れ線グラフ（推移）
+    st.markdown("---")
+    st.write("#### 📈 文章の展開に伴う感情の推移")
+    fig_line, ax_line = plt.subplots(figsize=(10, 4))
+    ax_line.plot(df_sentiment.index + 1, df_sentiment["推移スコア"],
+                 marker='o', linestyle='-', color='#9b59b6')
+    ax_line.axhline(0, color='gray', linestyle='--', alpha=0.5)
+    ax_line.set_xlabel("文の順番")
+    ax_line.set_ylabel("感情スコア (←ネガティブ / ポジティブ→)")
+    ax_line.spines['right'].set_visible(False)
+    ax_line.spines['top'].set_visible(False)
+    st.pyplot(fig_line)
 
 def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords):
     st.write("### 🌳/📍 クラスター分析（単語のグループ化）")
