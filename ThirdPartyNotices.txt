@@ -27,3 +27,15 @@ We are deeply grateful to the developers and contributors of these projects.
 - matplotlib
 
 For the full license texts of each library, please visit their respective official repositories or PyPI pages.
+
+■ Lexical Resources / 辞書データ
+
+- Japanese Sentiment Polarity Dictionary (Volume of Nouns)
+  File: pn.csv.m3.120408.trim
+  Author(s): Inui-Okazaki Laboratory, Tohoku University
+  Note: This application bundles the above dictionary.
+        When using the dictionary, please cite:
+        Masahiko Higashiyama, Kentaro Inui, Yuji Matsumoto,
+        "Learning Sentiment of Nouns from Selectional Preferences of Verbs and Adjectives",
+        Proceedings of the 14th Annual Meeting of the Association for Natural Language Processing, 2008.
+  Original site: https://www.cl.ecei.tohoku.ac.jp/Open_Resources-Japanese_Sentiment_Polarity_Dictionary.html
