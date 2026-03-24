@@ -868,7 +868,7 @@ if page_selection == "📖 使い方・機能紹介":
 elif page_selection == "📊 分析ツール本体":
     # 既存のCSS設定
     st.markdown("""
-                Ver.20260319
+                Ver.20260324
                          """) 
     # （※これ以降に、既存の with st.sidebar: やアップロード処理、分析処理をすべて入れ込みます。インデントに注意してください）
 
@@ -1115,8 +1115,11 @@ if st.session_state.get('text_ready', False):
                         # ==========================================
                         st.markdown("---")
                         st.header("3. AI分析（ローカルLLM）")
-                        tab_ai = st.tabs(["🤖 テキスト要約・分析"])[0]
-
+                        
+                        # ★タブを2つに増やします
+                        tab_ai, tab_after_coding = st.tabs(["🤖 テキスト要約・分析", "✨ AIアフターコーディング（辞書作成）"])
+                        
+                        # --- 既存の要約機能 ---
                         with tab_ai:
                             st.write("### LM Studioを使ったローカルAI要約")
                             st.write("※あらかじめLM Studioで Local Server (ポート1234) を起動しておいてください。")
@@ -1155,7 +1158,7 @@ if st.session_state.get('text_ready', False):
                                     except Exception as e:
                                         st.error(f"AIとの通信に失敗しました。LM Studioでサーバーが起動しているか確認してください。\nエラー詳細: {e}")
 
-                            # ボタンの外側（インデントを戻す）で、保管庫にデータがあれば表示＆ダウンロード可能にする
+                            # 保管庫にデータがあれば表示＆ダウンロード可能にする
                             if 'summary_result' in st.session_state:
                                 st.markdown(f"> {st.session_state['summary_result']}")
                                 
@@ -1167,3 +1170,84 @@ if st.session_state.get('text_ready', False):
                                     file_name="ai_summary_result.txt", 
                                     mime="text/plain"
                                 )
+
+                        # --- 新規追加：AIアフターコーディング機能 ---
+                        with tab_after_coding:
+                            st.write("### 抽出語の自動グルーピング（辞書作成支援）")
+                            st.write("頻出単語の上位リストをAIに読み込ませ、同義語や関連語をまとめるための「ゆらぎ統一辞書」のベースを自動作成します。")
+                            
+                            # ★変更点：ユーザーが抽出する単語数を指定できる入力ボックスを追加
+                            top_n = st.number_input(
+                                "AIに渡す上位単語の数（10〜500語）:", 
+                                min_value=10, 
+                                max_value=500, 
+                                value=100, 
+                                step=10
+                            )
+                            
+                            # 分析結果からユーザーが指定した上位N語を抽出してカンマ区切りの文字列にする
+                            top_words_list = df_result.head(top_n)["語句"].tolist() if "語句" in df_result.columns else df_result.head(top_n).iloc[:, 0].tolist()
+                            words_text = ", ".join(top_words_list)
+                            
+                            st.info(f"**AIに渡す対象単語（出現頻度上位{top_n}語）:**\n{words_text}")
+                            
+                            # アフターコーディング用の固定プロンプト
+                            coding_prompt = """
+あなたは優秀なデータアナリストです。以下の「対象単語リスト」の中に含まれる単語から、表記揺れや同義語を見つけ出し、名寄せ（統一）のための辞書を作成してください。
+
+【厳守する出力ルール】
+1. 必ず「元の単語,統一後の代表語」の【2列のみ】のCSV形式で出力してください。
+2. 1行につきカンマは1つだけです。3つ以上の単語をカンマで繋いではいけません。
+3. 複数の単語を同じ代表語に統一したい場合は、必ず行を分けてください。
+4. ヘッダー（見出し行）や説明文は一切出力しないでください。
+5. 統一の必要がない単語は出力しないでください。
+
+【良い出力例】（このように必ず行を分けて2列で出力する）
+いける,行く
+行ける,行く
+通う,行く
+自動車,車
+クルマ,車
+
+【悪い出力例】（このように1行に3つ以上並べるのは絶対にNG）
+行く,いける,行ける,通う
+車,自動車,クルマ
+"""
+
+                            
+                            if st.button("AIで辞書を作成する"):
+                                with st.spinner("AIが単語を分類中...（しばらくお待ちください）"):
+                                    try:
+                                        from openai import OpenAI
+                                        client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+                                        
+                                        response = client.chat.completions.create(
+                                            model="local-model",
+                                            messages=[
+                                                {"role": "system", "content": "あなたは優秀なデータアナリストです。指示されたフォーマットのみを出力します。"},
+                                                {"role": "user", "content": f"{coding_prompt}\n\n【対象単語リスト】\n{words_text}"}
+                                            ],
+                                            temperature=0.3, # 創造性より正確性を重視して温度を下げる
+                                        )
+                                        
+                                        st.session_state['after_coding_result'] = response.choices[0].message.content
+                                        st.success("辞書の作成が完了しました！")
+                                        
+                                    except Exception as e:
+                                        st.error(f"AIとの通信に失敗しました。エラー詳細: {e}")
+
+                            # 結果の表示とダウンロードボタン
+                            if 'after_coding_result' in st.session_state:
+                                st.write("#### AIの作成結果")
+                                # AIの出力をそのまま表示（コードブロックでCSVっぽく見せる）
+                                st.code(st.session_state['after_coding_result'], language="csv")
+                                
+                                # Excelでも文字化けしないように utf-8-sig でエンコード
+                                csv_data = st.session_state['after_coding_result'].encode('utf-8-sig')
+                                st.download_button(
+                                    label="📥 ゆらぎ統一辞書（CSV）としてダウンロード", 
+                                    data=csv_data, 
+                                    file_name="ai_synonym_dict.csv", 
+                                    mime="text/csv"
+                                )
+                                st.caption("※ダウンロードしたCSVファイルは、左側のメニュー「同義語・ゆらぎ統一辞書をアップロード」からそのまま読み込ませて分析に利用できます。必要に応じてExcel等で開いて微調整してください。")
