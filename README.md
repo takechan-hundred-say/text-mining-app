@@ -18,8 +18,7 @@ StreamlitとローカルLLMを使ったテキストマイニングアプリ
 
 ### 本体のセットアップ
 #### ①セットアップファイルからインストールする場合
-* リリースからセットアップファイルをダウンロードします。
-  > https://github.com/takechan-hundred-say/text-mining-app/releases/download/v0.4.0/Text_mining_mysetup_ver.0.4.exe
+* 右側のリリースからセットアップファイルをダウンロードします。
 * setupのexeファイルを実行して、インストールを行ってください。
 * 最初の起動には少し時間がかかりますので、ご注意ください。
 #### ②リポジトリからインストールする場合
