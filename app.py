@@ -7,6 +7,7 @@ import io
 import csv
 import tempfile
 import os
+import sys          # ★ここを追加！  
 import pypdf
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
@@ -28,38 +29,6 @@ import signal
 # Windows標準のフォント（メイリオ）を指定
 plt.rcParams['font.family'] = 'Meiryo'
 
-@st.cache_data
-def load_polarity_dict_tohoku():
-    """
-    東北大学・日本語評価極性辞書（名詞編）を読み込む
-    pn.csv.m3.120408.trim をdicフォルダに置いて使用
-    形式: 見出し語\t極性(p/n/e/?p?n等)\t意味カテゴリ
-    """
-    import os
-    dict_path = os.path.join('dic', 'pn.csv.m3.120408.trim')
-    polarity_dict = {}
-    
-    if not os.path.exists(dict_path):
-        return None  # ファイルがなければNoneを返す
-    
-    try:
-        df_pncsv = pd.read_csv(
-            dict_path,
-            sep="\t",
-            names=["term", "sentiment", "semantic_category"],
-            encoding="utf-8"
-        )
-        # 正規化（全角→半角）して辞書に格納
-        import unicodedata
-        for _, row in df_pncsv.iterrows():
-            term_nfkc = unicodedata.normalize('NFKC', str(row['term']))
-            polarity_dict[term_nfkc] = str(row['sentiment'])
-    except Exception as e:
-        st.error(f"東北大学極性辞書の読み込みに失敗しました: {e}")
-        return None
-    
-    return polarity_dict
-
 def load_synonym_dict(uploaded_csv):
     synonym_dict = {}
     if uploaded_csv is not None:
@@ -71,6 +40,44 @@ def load_synonym_dict(uploaded_csv):
         except Exception as e:
             st.error(f"同義語辞書の読み込みに失敗しました: {e}")
     return synonym_dict
+
+# ↓ ★ここに新しく追加する（load_synonym_dict のすぐ下）
+@st.cache_data
+def load_polarity_dict_tohoku():
+    import unicodedata
+
+    # ★ exe化（frozen）時と通常実行時でパスを切り替える
+    # （ここに先ほどのコードが入っています）
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS   # exe化時は一時展開フォルダ
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+
+    dict_path = os.path.join(base, 'dic', 'pn.csv.m3.120408.trim')
+
+    polarity_dict = {}
+    if not os.path.exists(dict_path):
+        st.warning(
+            f"辞書ファイルが見つかりません: {dict_path}\n"
+            "dicフォルダに `pn.csv.m3.120408.trim` を配置してください。"
+        )
+        return None
+
+    try:
+        df_pncsv = pd.read_csv(
+            dict_path,
+            sep="\t",
+            names=["term", "sentiment", "semantic_category"],
+            encoding="utf-8"
+        )
+        for _, row in df_pncsv.iterrows():
+            term_nfkc = unicodedata.normalize('NFKC', str(row['term']))
+            polarity_dict[term_nfkc] = str(row['sentiment'])
+    except Exception as e:
+        st.error(f"東北大学極性辞書の読み込みに失敗しました: {e}")
+        return None
+
+    return polarity_dict
 
 def extract_text(uploaded_file):
     file_type = uploaded_file.name.split('.')[-1].lower()
@@ -388,150 +395,126 @@ def draw_tfidf_chart(sentences_words):
     else:
         st.info("計算に必要な文データがありません。")
 
+# ============================================================
+# テキスト全体の感情分析（東北大学評価極性辞書・一本化版）
+# ============================================================
 def draw_sentiment_analysis(text):
+    import os
+    import unicodedata
+    from janome.tokenizer import Tokenizer as JanomeTokenizer
+
     st.write("### 感情分析（ネガポジ判定）")
+    st.write("東北大学評価極性辞書（名詞編）を使用して、文章中の各文の感情をポジティブ／ネガティブに判定します。")
 
-    # ★辞書の選択UI
-    method = st.radio(
-        "感情分析の方式を選択してください",
-        ["🤖 AIモデル方式（asari）", "📖 辞書方式（東北大学・日本語評価極性辞書）"],
-        horizontal=True
-    )
+    # ---- 辞書の読み込み ----
+    dic_path = os.path.join("dic", "pn.csv.m3.120408.trim")
+    if not os.path.exists(dic_path):
+        st.error(f"辞書ファイルが見つかりません: {dic_path}")
+        st.caption("「dic」フォルダに「pn.csv.m3.120408.trim」を配置してください。")
+        return
 
-    sentences = [s.strip() + '。' for s in text.replace('\n', '。').split('。') if s.strip()]
+    df_pn = pd.read_csv(dic_path, sep="\t", names=["term", "sentiment", "category"])
+    df_pn["term"] = [unicodedata.normalize("NFKC", t) for t in df_pn["term"]]
+    pn_dict = {}
+    for _, r in df_pn.iterrows():
+        s = r["sentiment"]
+        if s == "p":
+            pn_dict[r["term"]] = 1.0
+        elif s == "n":
+            pn_dict[r["term"]] = -1.0
+        elif s == "e":
+            pn_dict[r["term"]] = 0.0
+
+    # ---- 文に分割 ----
+    sentences = [s.strip() + "。" for s in
+                 text.replace("\n", "。").split("。") if s.strip()]
     if not sentences:
         st.warning("分析する文がありません。")
         return
 
-    # =============================================
-    # 方式A: 既存のasari（AIモデル）方式
-    # =============================================
-    if method == "🤖 AIモデル方式（asari）":
-        try:
-            sonar = Sonar()
-        except Exception as e:
-            st.error(f"asariの起動に失敗しました: {e}")
-            return
+    t = JanomeTokenizer()
+    results = []
 
-        results = []
-        for sentence in sentences:
-            if len(sentence) <= 1:
-                continue
-            res = sonar.ping(sentence)
-            top_class = res['top_class']
-            pos_prob = next(c['confidence'] for c in res['classes'] if c['class_name'] == 'positive')
-            neg_prob = next(c['confidence'] for c in res['classes'] if c['class_name'] == 'negative')
-            trend_score = pos_prob - neg_prob
+    for sentence in sentences:
+        if len(sentence) <= 1:
+            continue
 
-            if abs(trend_score) < 0.2:
-                label = "😐 ニュートラル"
-                score = 0.5
-            elif top_class == 'positive':
-                label = "😊 ポジティブ"
-                score = pos_prob
-            else:
-                label = "😞 ネガティブ"
-                score = -neg_prob
+        tokens = list(t.tokenize(sentence))
+        scores = [pn_dict[unicodedata.normalize("NFKC", tk.base_form)]
+                  for tk in tokens
+                  if unicodedata.normalize("NFKC", tk.base_form) in pn_dict]
 
-            results.append({
-                "文": sentence,
-                "判定": label,
-                "スコア(確信度)": round(score, 3),
-                "推移スコア": trend_score
-            })
+        if not scores:
+            continue
 
-    # =============================================
-    # 方式B: 東北大学・日本語評価極性辞書方式
-    # =============================================
-    else:
-        polarity_dict = load_polarity_dict_tohoku()
-        if polarity_dict is None:
-            st.error(
-                "辞書ファイルが見つかりません。\n"
-                "東北大学のサイトから `pn.csv.m3.120408.trim` をダウンロードし、"
-                "アプリフォルダ内の `dic` フォルダに配置してください。\n"
-                "https://www.cl.ecei.tohoku.ac.jp/Open_Resources-Japanese_Sentiment_Polarity_Dictionary.html"
-            )
-            return
+        avg_score = sum(scores) / len(scores)
+        pos_count = scores.count(1.0)
+        neg_count = scores.count(-1.0)
 
-        # 極性マッピング（辞書の記号→スコア）
-        # p=ポジティブ, n=ネガティブ, e=ニュートラル, ?p?n=曖昧
-        polarity_score_map = {
-            "p": 1.0, "?p": 0.5, "?p?e": 0.3,
-            "e": 0.0,
-            "n": -1.0, "?n": -0.5, "?p?n": 0.0,
-            "a": 0.0, "o": 0.0
-        }
+        if abs(avg_score) < 0.05:
+            label = "😐 ニュートラル"
+        elif avg_score > 0:
+            label = "😊 ポジティブ"
+        else:
+            label = "😞 ネガティブ"
 
-        tokenizer = Tokenizer()
-        results = []
-        for sentence in sentences:
-            if len(sentence) <= 1:
-                continue
+        results.append({
+            "文": sentence,
+            "判定": label,
+            "平均スコア": round(avg_score, 3),
+            "ポジティブ語数": pos_count,
+            "ネガティブ語数": neg_count,
+            "推移スコア": avg_score
+        })
 
-            scores = []
-            hit_words = []
-            for token in tokenizer.tokenize(sentence):
-                import unicodedata
-                surface = unicodedata.normalize('NFKC', token.surface)
-                base = unicodedata.normalize('NFKC', token.base_form if token.base_form != '*' else token.surface)
-
-                # 表層形・基本形の両方で辞書を検索
-                for w in [surface, base]:
-                    if w in polarity_dict:
-                        pol = polarity_dict[w]
-                        sc = polarity_score_map.get(pol, 0.0)
-                        scores.append(sc)
-                        hit_words.append(f"{w}({pol})")
-                        break
-
-            if scores:
-                trend_score = sum(scores) / len(scores)
-            else:
-                trend_score = 0.0
-
-            if trend_score > 0.1:
-                label = "😊 ポジティブ"
-            elif trend_score < -0.1:
-                label = "😞 ネガティブ"
-            else:
-                label = "😐 ニュートラル"
-
-            results.append({
-                "文": sentence,
-                "判定": label,
-                "スコア": round(trend_score, 3),
-                "推移スコア": trend_score,
-                "ヒット語句": ", ".join(hit_words) if hit_words else "（該当なし）"
-            })
-
-    # =============================================
-    # 共通：結果の表示
-    # =============================================
     df_sentiment = pd.DataFrame(results)
+
     if df_sentiment.empty:
-        st.info("判定できる文がありませんでした。")
+        st.info("判定できる文がありませんでした。（辞書にヒットする語がありません）")
         return
 
-    pos_count = len(df_sentiment[df_sentiment["判定"] == "😊 ポジティブ"])
-    neg_count = len(df_sentiment[df_sentiment["判定"] == "😞 ネガティブ"])
-    neu_count = len(df_sentiment[df_sentiment["判定"] == "😐 ニュートラル"])
+    pos_count_total = len(df_sentiment[df_sentiment["判定"] == "😊 ポジティブ"])
+    neg_count_total = len(df_sentiment[df_sentiment["判定"] == "😞 ネガティブ"])
+    neu_count_total = len(df_sentiment[df_sentiment["判定"] == "😐 ニュートラル"])
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("ポジティブな文", f"{pos_count}件")
-    col2.metric("ネガティブな文", f"{neg_count}件")
-    col3.metric("ニュートラルな文", f"{neu_count}件")
+    col1.metric("ポジティブな文", f"{pos_count_total}件")
+    col2.metric("ネガティブな文", f"{neg_count_total}件")
+    col3.metric("ニュートラルな文", f"{neu_count_total}件")
 
-    st.dataframe(df_sentiment, use_container_width=True)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    labels = ['ポジティブ', 'ネガティブ', 'ニュートラル']
+    sizes  = [pos_count_total, neg_count_total, neu_count_total]
+    colors = ['#ff9999', '#66b3ff', '#d3d3d3']
 
-    # CSVダウンロード
-    csv = df_sentiment.to_csv(index=False).encode('utf-8-sig')
-    st.download_button("📥 感情分析結果（CSV）をダウンロード", data=csv,
-                       file_name="sentiment_result.csv", mime="text/csv")
+    if sum(sizes) > 0:
+        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+        ax.axis('equal')
 
-    # 折れ線グラフ（推移）
+        col_chart, col_table = st.columns([1, 1])
+        with col_chart:
+            st.pyplot(fig)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=300)
+            st.download_button(
+                "🖼️ 円グラフを保存",
+                data=buf.getvalue(),
+                file_name="sentiment_pie.png",
+                mime="image/png"
+            )
+        with col_table:
+            st.dataframe(
+                df_sentiment[["文", "判定", "平均スコア", "ポジティブ語数", "ネガティブ語数"]],
+                height=300
+            )
+    else:
+        st.info("判定できる文がありませんでした。")
+
+    # ---- 感情の推移グラフ ----
     st.markdown("---")
     st.write("#### 📈 文章の展開に伴う感情の推移")
+    st.write("横軸が文章の進行（最初から最後）、縦軸が感情スコアを示します。")
+
     fig_line, ax_line = plt.subplots(figsize=(10, 4))
     ax_line.plot(df_sentiment.index + 1, df_sentiment["推移スコア"],
                  marker='o', linestyle='-', color='#9b59b6')
@@ -541,6 +524,555 @@ def draw_sentiment_analysis(text):
     ax_line.spines['right'].set_visible(False)
     ax_line.spines['top'].set_visible(False)
     st.pyplot(fig_line)
+    plt.close(fig_line)
+
+
+# ============================================================
+# ケース別感情分析（グループ集計対応・Excel 2シート出力）
+# ============================================================
+def draw_sentiment_by_case(df_meta, text_col, meta_cols):
+    """
+    ケース別感情分析（完全版）
+    - 2方式対応（asari / 東北大学評価極性辞書）
+    - 分析対象テキスト列の選択（自由記述が複数列ある場合に対応）
+    - ケース別スコア一覧
+    - グループ別：記述統計 ＋ 確認用棒グラフ
+    - Excel 2シート一括ダウンロード（ケース別＋グループ別）
+    """
+
+    st.write("### 📋 ケース別 感情分析")
+
+    # ============================================================
+    # ① 分析対象テキスト列の選択
+    # ============================================================
+    all_cols = list(df_meta.columns)
+    text_col_options = [text_col] + [c for c in all_cols if c != text_col]
+
+    selected_text_col = st.selectbox(
+        "📝 感情分析する質問列（テキスト列）を選んでください",
+        text_col_options,
+        index=0,
+        key="case_sentiment_text_col"
+    )
+    st.caption(f"現在選択中: **{selected_text_col}**　（他の自由記述列がある場合は切り替えてください）")
+
+    # ============================================================
+    # ② 分析方式の選択
+    # ============================================================
+    method = st.radio(
+        "感情分析の方式を選択してください",
+        ["asari（AIモデル）", "東北大学評価極性辞書（名詞編）"],
+        horizontal=True,
+        key="case_sentiment_method"
+    )
+
+    # ============================================================
+    # ③ グループ化する属性列の選択
+    # ============================================================
+    group_col = None
+    if meta_cols:
+        group_col_input = st.selectbox(
+            "📌 グループ化する属性列を選んでください",
+            ["（グループ化しない）"] + meta_cols,
+            key="case_sentiment_group"
+        )
+        if group_col_input != "（グループ化しない）":
+            group_col = group_col_input
+    else:
+        st.info("属性列が読み込まれていません。属性列を含むCSV/Excelを読み込むとグループ集計が利用できます。")
+
+    # ============================================================
+    # ④ 実行ボタン
+    # ============================================================
+    if not st.button("▶ ケース別感情分析を実行", key="run_case_sentiment"):
+        return
+
+    with st.spinner("ケースごとに感情分析中..."):
+        results = []
+
+        # ---- asari 方式 ----
+        if method == "asari（AIモデル）":
+            try:
+                from asari.api import Sonar
+                sonar = Sonar()
+            except Exception as e:
+                st.error(f"asariの起動に失敗しました: {e}")
+                return
+
+            for idx, row in df_meta.iterrows():
+                case_text = str(row[selected_text_col]) if pd.notna(row[selected_text_col]) else ""
+                if not case_text.strip():
+                    continue
+
+                # 文に分割して1文ずつ判定
+                sentences = [s.strip() + "。" for s in
+                             case_text.replace("\n", "。").split("。") if s.strip()]
+                pos_scores, neg_scores, trend_scores = [], [], []
+
+                for sentence in sentences:
+                    if len(sentence) <= 1:
+                        continue
+                    try:
+                        res = sonar.ping(sentence)
+                        pos_p = next(c["confidence"] for c in res["classes"] if c["class_name"] == "positive")
+                        neg_p = next(c["confidence"] for c in res["classes"] if c["class_name"] == "negative")
+                        pos_scores.append(pos_p)
+                        neg_scores.append(neg_p)
+                        trend_scores.append(pos_p - neg_p)
+                    except:
+                        continue
+
+                if not trend_scores:
+                    continue
+
+                avg_trend = sum(trend_scores) / len(trend_scores)
+                avg_pos   = sum(pos_scores)   / len(pos_scores)
+                avg_neg   = sum(neg_scores)   / len(neg_scores)
+
+                if abs(avg_trend) < 0.2:
+                    overall = "😐 ニュートラル"
+                elif avg_trend > 0:
+                    overall = "😊 ポジティブ"
+                else:
+                    overall = "😞 ネガティブ"
+
+                record = {
+                    "ケースNo": idx + 1,
+                    "テキスト（先頭50文字）": case_text[:50],
+                    "総合判定": overall,
+                    "平均ポジティブ率": round(avg_pos, 3),
+                    "平均ネガティブ率": round(avg_neg, 3),
+                    "平均推移スコア": round(avg_trend, 3),
+                }
+                for col in meta_cols:
+                    record[col] = row[col]
+                results.append(record)
+
+            score_col = "平均推移スコア"
+
+        # ---- 東北大学評価極性辞書 方式 ----
+        else:
+            import os
+            import unicodedata
+            from janome.tokenizer import Tokenizer as JanomeTokenizer
+
+            dic_path = os.path.join("dic", "pn.csv.m3.120408.trim")
+            if not os.path.exists(dic_path):
+                st.error(f"辞書ファイルが見つかりません: {dic_path}")
+                st.caption("「dic」フォルダに「pn.csv.m3.120408.trim」を配置してください。")
+                return
+
+            df_pn = pd.read_csv(dic_path, sep="\t", names=["term", "sentiment", "category"])
+            # 全角→半角の正規化
+            df_pn["term"] = [unicodedata.normalize("NFKC", t) for t in df_pn["term"]]
+            pn_dict = {}
+            for _, r in df_pn.iterrows():
+                s = r["sentiment"]
+                if s == "p":
+                    pn_dict[r["term"]] = 1.0
+                elif s == "n":
+                    pn_dict[r["term"]] = -1.0
+                elif s == "e":
+                    pn_dict[r["term"]] = 0.0
+
+            t = JanomeTokenizer()
+
+            for idx, row in df_meta.iterrows():
+                case_text = str(row[selected_text_col]) if pd.notna(row[selected_text_col]) else ""
+                if not case_text.strip():
+                    continue
+
+                tokens = list(t.tokenize(case_text))
+                scores = [pn_dict[unicodedata.normalize("NFKC", tk.base_form)]
+                          for tk in tokens
+                          if unicodedata.normalize("NFKC", tk.base_form) in pn_dict]
+
+                if not scores:
+                    continue
+
+                avg_score = sum(scores) / len(scores)
+                pos_count = scores.count(1.0)
+                neg_count = scores.count(-1.0)
+                total     = len(scores)
+
+                if abs(avg_score) < 0.05:
+                    overall = "😐 ニュートラル"
+                elif avg_score > 0:
+                    overall = "😊 ポジティブ"
+                else:
+                    overall = "😞 ネガティブ"
+
+                record = {
+                    "ケースNo": idx + 1,
+                    "テキスト（先頭50文字）": case_text[:50],
+                    "総合判定": overall,
+                    "平均スコア": round(avg_score, 3),
+                    "ポジティブ語数": pos_count,
+                    "ネガティブ語数": neg_count,
+                    "判定語数合計": total,
+                }
+                for col in meta_cols:
+                    record[col] = row[col]
+                results.append(record)
+
+            score_col = "平均スコア"
+
+    # ============================================================
+    # ⑤ 結果が空の場合
+    # ============================================================
+    if not results:
+        st.warning("判定できるケースがありませんでした。テキスト列や辞書ファイルを確認してください。")
+        return
+
+    df_result_case = pd.DataFrame(results)
+
+    # ============================================================
+    # ⑥ ケース別一覧の表示
+    # ============================================================
+    st.markdown("---")
+    st.write(f"#### 📋 ケース別 感情スコア一覧（{len(df_result_case)}件）")
+    st.dataframe(df_result_case, use_container_width=True)
+
+    # ============================================================
+    # ⑦ グループ別：記述統計 ＋ 確認用棒グラフ
+    # ============================================================
+    df_group_stats = None
+
+    if group_col and group_col in df_result_case.columns:
+
+        st.markdown("---")
+        st.write(f"#### 📊 「{group_col}」別 感情スコアの記述統計")
+
+        # --- 記述統計 ---
+        df_group_stats = (
+            df_result_case
+            .groupby(group_col)[score_col]
+            .describe()
+            .round(3)
+            .reset_index()
+        )
+        df_group_stats.columns = [
+            group_col, "件数", "平均値", "標準偏差",
+            "最小値", "25%ile", "中央値", "75%ile", "最大値"
+        ]
+        st.dataframe(df_group_stats, use_container_width=True)
+
+        # --- 確認用棒グラフ（matplotlib：シンプル）---
+        st.write(f"#### 📊 「{group_col}」別 平均感情スコア（確認用）")
+
+        df_bar = df_result_case.groupby(group_col)[score_col].mean().reset_index()
+        df_bar.columns = [group_col, "平均感情スコア"]
+
+        fig_bar, ax_bar = plt.subplots(figsize=(8, 4))
+        colors = ["#6699ff" if v >= 0 else "#ff6666" for v in df_bar["平均感情スコア"]]
+        ax_bar.bar(df_bar[group_col].astype(str), df_bar["平均感情スコア"], color=colors)
+        ax_bar.axhline(0, color="gray", linestyle="--", alpha=0.5)
+        ax_bar.set_xlabel(group_col)
+        ax_bar.set_ylabel("平均感情スコア")
+        ax_bar.set_title(f"{group_col} 別 平均感情スコア（確認用）")
+        ax_bar.spines["right"].set_visible(False)
+        ax_bar.spines["top"].set_visible(False)
+        plt.tight_layout()
+        st.pyplot(fig_bar)
+        plt.close(fig_bar)
+
+    # ============================================================
+    # ⑧ 統計的検定（ノンパラメトリック検定・初期設定）
+    # ============================================================
+    if group_col and group_col in df_result_case.columns:
+
+        from scipy import stats
+
+        st.markdown("---")
+        st.write(f"#### 🔬 統計的検定：「{group_col}」別 感情スコアの比較")
+
+        # ---- 検定方式の選択（ノンパラメトリックをデフォルトに）----
+        test_type = st.radio(
+            "検定方式を選択してください",
+            ["ノンパラメトリック検定（推奨）", "パラメトリック検定"],
+            index=0,  # ← ノンパラメトリックがデフォルト
+            horizontal=True,
+            key="test_type_select"
+        )
+        st.caption(
+            "💡 **ノンパラメトリック検定**は正規分布を前提としないため、"
+            "社会福祉学領域の自由記述データ分析に適しています。"
+        )
+
+        groups       = df_result_case.groupby(group_col)[score_col].apply(list)
+        group_names  = list(groups.index)
+        group_values = list(groups.values)
+        n_groups     = len(group_names)
+
+        df_test_result = None  # 初期化
+
+        if n_groups < 2:
+            st.info("グループが1つのみのため、検定はできません。")
+
+        # ============================================================
+        # ノンパラメトリック検定
+        # ============================================================
+        elif test_type == "ノンパラメトリック検定（推奨）":
+
+            if n_groups == 2:
+                # ---- Mann-Whitney U 検定（2グループ）----
+                st.write("##### 📌 Mann-Whitney U 検定（2グループ・ノンパラメトリック）")
+
+                g1, g2   = group_values[0], group_values[1]
+                u_stat, u_p = stats.mannwhitneyu(g1, g2, alternative="two-sided")
+
+                # 効果量 r = Z / √N の計算
+                import numpy as np
+                n_total = len(g1) + len(g2)
+                # 正規近似によるZ値
+                z_val = stats.norm.ppf(1 - u_p / 2)
+                effect_r = z_val / np.sqrt(n_total)
+
+                st.markdown(f"""
+| 項目 | 値 |
+|---|---|
+| グループ1（{group_names[0]}） | n={len(g1)}、中央値={round(sorted(g1)[len(g1)//2], 3)} |
+| グループ2（{group_names[1]}） | n={len(g2)}、中央値={round(sorted(g2)[len(g2)//2], 3)} |
+| U統計量 | {round(u_stat, 3)} |
+| p値 | **{round(u_p, 4)}** |
+| 効果量 r | {round(effect_r, 3)}（目安：小=0.1 / 中=0.3 / 大=0.5） |
+| 判定 | {"✅ 有意差あり（p < 0.05）" if u_p < 0.05 else "❌ 有意差なし（p ≥ 0.05）"} |
+""")
+
+                if u_p < 0.05:
+                    st.success(
+                        f"「{group_names[0]}」と「{group_names[1]}」の感情スコアには"
+                        f"統計的に有意な差があります（p = {round(u_p, 4)}）。"
+                    )
+                else:
+                    st.info(
+                        f"「{group_names[0]}」と「{group_names[1]}」の感情スコアに"
+                        f"有意差は認められませんでした（p = {round(u_p, 4)}）。"
+                    )
+
+                df_test_result = pd.DataFrame([{
+                    "検定手法": "Mann-Whitney U検定",
+                    "グループ1": group_names[0],
+                    "グループ2": group_names[1],
+                    "U統計量": round(u_stat, 3),
+                    "p値": round(u_p, 4),
+                    "効果量 r": round(effect_r, 3),
+                    "有意差（p<0.05）": "あり" if u_p < 0.05 else "なし"
+                }])
+
+            else:
+                # ---- Kruskal-Wallis 検定（3グループ以上）----
+                st.write(f"##### 📌 Kruskal-Wallis 検定（{n_groups}グループ・ノンパラメトリック）")
+
+                h_stat, kw_p = stats.kruskal(*group_values)
+
+                # グループ別の記述統計（中央値ベース）
+                import numpy as np
+                kw_summary = []
+                for name, vals in zip(group_names, group_values):
+                    kw_summary.append({
+                        "グループ": name,
+                        "n": len(vals),
+                        "中央値": round(float(np.median(vals)), 3),
+                        "平均順位（参考）": None  # 後で埋める
+                    })
+
+                # 平均順位の計算
+                all_vals    = df_result_case[score_col].values
+                all_groups  = df_result_case[group_col].values
+                ranks       = stats.rankdata(all_vals)
+                for i, name in enumerate(group_names):
+                    mask = all_groups == name
+                    kw_summary[i]["平均順位（参考）"] = round(float(ranks[mask].mean()), 3)
+
+                st.dataframe(pd.DataFrame(kw_summary), use_container_width=True)
+
+                st.markdown(f"""
+| 項目 | 値 |
+|---|---|
+| H統計量 | {round(h_stat, 3)} |
+| p値 | **{round(kw_p, 4)}** |
+| 判定 | {"✅ グループ間に有意差あり（p < 0.05）" if kw_p < 0.05 else "❌ グループ間に有意差なし（p ≥ 0.05）"} |
+""")
+
+                if kw_p < 0.05:
+                    st.success(
+                        f"グループ間の感情スコアに統計的に有意な差があります"
+                        f"（p = {round(kw_p, 4)}）。"
+                    )
+
+                    # ---- Dunn 検定（多重比較・Bonferroni補正）----
+                    st.write("##### 📌 多重比較：Dunn検定（Bonferroni補正）")
+                    try:
+                        from itertools import combinations
+                        pair_results = []
+                        pairs = list(combinations(range(n_groups), 2))
+                        n_pairs = len(pairs)
+
+                        for i, j in pairs:
+                            g_i = group_values[i]
+                            g_j = group_values[j]
+                            # Dunn検定の近似（Mann-Whitney U + Bonferroni補正）
+                            _, raw_p = stats.mannwhitneyu(g_i, g_j, alternative="two-sided")
+                            adjusted_p = min(raw_p * n_pairs, 1.0)  # Bonferroni補正
+
+                            pair_results.append({
+                                "グループ1": group_names[i],
+                                "グループ2": group_names[j],
+                                "p値（補正前）": round(raw_p, 4),
+                                "p値（Bonferroni補正後）": round(adjusted_p, 4),
+                                "有意差（p<0.05）": "✅ あり" if adjusted_p < 0.05 else "❌ なし"
+                            })
+
+                        df_dunn = pd.DataFrame(pair_results)
+                        st.dataframe(df_dunn, use_container_width=True)
+                        st.caption(
+                            "Bonferroni補正済みp値 < 0.05 の組み合わせが有意差ありのペアです。"
+                        )
+
+                        df_test_result = pd.concat([
+                            pd.DataFrame([{
+                                "検定手法": "Kruskal-Wallis検定",
+                                "グループ数": n_groups,
+                                "H統計量": round(h_stat, 3),
+                                "p値": round(kw_p, 4),
+                                "有意差（p<0.05）": "あり"
+                            }]),
+                            df_dunn
+                        ], ignore_index=True)
+
+                    except Exception as e:
+                        st.warning(f"多重比較の計算中にエラーが発生しました: {e}")
+                        df_test_result = pd.DataFrame([{
+                            "検定手法": "Kruskal-Wallis検定",
+                            "グループ数": n_groups,
+                            "H統計量": round(h_stat, 3),
+                            "p値": round(kw_p, 4),
+                            "有意差（p<0.05）": "あり"
+                        }])
+                else:
+                    st.info(
+                        f"グループ間の感情スコアに有意差は認められませんでした"
+                        f"（p = {round(kw_p, 4)}）。"
+                    )
+                    df_test_result = pd.DataFrame([{
+                        "検定手法": "Kruskal-Wallis検定",
+                        "グループ数": n_groups,
+                        "H統計量": round(h_stat, 3),
+                        "p値": round(kw_p, 4),
+                        "有意差（p<0.05）": "なし"
+                    }])
+
+        # ============================================================
+        # パラメトリック検定（選択時のみ）
+        # ============================================================
+        else:
+            if n_groups == 2:
+                st.write("##### 📌 対応なしt検定（2グループ）")
+
+                g1, g2 = group_values[0], group_values[1]
+                lev_stat, lev_p = stats.levene(g1, g2)
+                equal_var = lev_p >= 0.05
+                t_stat, t_p = stats.ttest_ind(g1, g2, equal_var=equal_var)
+
+                st.markdown(f"""
+| 項目 | 値 |
+|---|---|
+| グループ1（{group_names[0]}） | n={len(g1)}、平均={round(sum(g1)/len(g1),3)} |
+| グループ2（{group_names[1]}） | n={len(g2)}、平均={round(sum(g2)/len(g2),3)} |
+| Levene検定（等分散） | F={round(lev_stat,3)}、p={round(lev_p,3)} → {"等分散（Student法）" if equal_var else "不等分散（Welch法）"} |
+| t統計量 | {round(t_stat, 3)} |
+| p値 | **{round(t_p, 4)}** |
+| 判定 | {"✅ 有意差あり（p < 0.05）" if t_p < 0.05 else "❌ 有意差なし（p ≥ 0.05）"} |
+""")
+
+                if t_p < 0.05:
+                    st.success(f"有意差あり（p = {round(t_p, 4)}）")
+                else:
+                    st.info(f"有意差なし（p = {round(t_p, 4)}）")
+
+                df_test_result = pd.DataFrame([{
+                    "検定手法": "対応なしt検定（Welch法）" if not equal_var else "対応なしt検定（Student法）",
+                    "t統計量": round(t_stat, 3),
+                    "p値": round(t_p, 4),
+                    "有意差（p<0.05）": "あり" if t_p < 0.05 else "なし"
+                }])
+
+            else:
+                st.write(f"##### 📌 一元配置ANOVA（{n_groups}グループ）")
+
+                f_stat, anova_p = stats.f_oneway(*group_values)
+
+                st.markdown(f"""
+| 項目 | 値 |
+|---|---|
+| F統計量 | {round(f_stat, 3)} |
+| p値 | **{round(anova_p, 4)}** |
+| 判定 | {"✅ 有意差あり（p < 0.05）" if anova_p < 0.05 else "❌ 有意差なし（p ≥ 0.05）"} |
+""")
+
+                if anova_p < 0.05:
+                    st.success(f"グループ間に有意差あり（p = {round(anova_p, 4)}）")
+                    try:
+                        from statsmodels.stats.multicomp import pairwise_tukeyhsd
+                        tukey_result = pairwise_tukeyhsd(
+                            df_result_case[score_col].values,
+                            df_result_case[group_col].values,
+                            alpha=0.05
+                        )
+                        df_tukey = pd.DataFrame(
+                            data=tukey_result._results_table.data[1:],
+                            columns=tukey_result._results_table.data[0]
+                        )
+                        st.write("##### 📌 多重比較（Tukey HSD）")
+                        st.dataframe(df_tukey, use_container_width=True)
+                        st.caption("reject=True の組み合わせが有意差ありのペアです。")
+                    except ImportError:
+                        st.warning("Tukey HSDには statsmodels が必要です。`pip install statsmodels` を実行してください。")
+                else:
+                    st.info(f"グループ間に有意差なし（p = {round(anova_p, 4)}）")
+
+                df_test_result = pd.DataFrame([{
+                    "検定手法": "一元配置ANOVA",
+                    "F統計量": round(f_stat, 3),
+                    "p値": round(anova_p, 4),
+                    "有意差（p<0.05）": "あり" if anova_p < 0.05 else "なし"
+                }])
+
+    else:
+        df_test_result = None
+
+
+    # ============================================================
+    # ⑨ Excel 3シート 一括ダウンロード
+    # ============================================================
+    st.markdown("---")
+    st.write("#### 📥 Excelで一括ダウンロード")
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        # シート1：ケース別
+        df_result_case.to_excel(writer, index=False, sheet_name="ケース別感情分析")
+
+        # シート2：グループ別集計 or 全体サマリー
+        if df_group_stats is not None:
+            df_group_stats.to_excel(writer, index=False, sheet_name="グループ別集計")
+        else:
+            summary_df = df_result_case[[score_col]].describe().round(3).reset_index()
+            summary_df.columns = ["統計量", "値"]
+            summary_df.to_excel(writer, index=False, sheet_name="全体サマリー")
+
+        # シート3：検定結果（グループ化した場合のみ）
+        if df_test_result is not None:
+            df_test_result.to_excel(writer, index=False, sheet_name="統計的検定結果")
+
+    st.download_button(
+        label="📥 結果をExcelで一括ダウンロード（ケース別 ＋ グループ別 ＋ 検定結果）",
+        data=buffer.getvalue(),
+        file_name=f"case_sentiment_{selected_text_col}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_case_sentiment_excel"
+    )
 
 def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords):
     st.write("### 🌳/📍 クラスター分析（単語のグループ化）")
@@ -1192,7 +1724,19 @@ if st.session_state.get('text_ready', False):
                             draw_tfidf_chart(sentences_words)
                         
                         with tab6:
+                            # ── 既存：テキスト全体の感情分析 ──
                             draw_sentiment_analysis(text)
+
+                            # ── 追加：ケース別感情分析（属性データ読込済みの場合のみ表示）──
+                            st.markdown("---")
+                            if st.session_state.get("df_meta") is not None:
+                                draw_sentiment_by_case(
+                                    st.session_state["df_meta"],
+                                    st.session_state["text_col"],
+                                    st.session_state.get("meta_cols", [])
+                                )
+                            else:
+                                st.info("💡 ケース別感情分析は、属性データ付きCSV/Excelを読み込むと利用できます。")
                             
                         with tab7:
                             draw_kwic(text, df_result)
