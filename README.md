@@ -51,6 +51,7 @@ StreamlitとローカルLLMを使ったテキストマイニングアプリ
 - **氏名**: 坂本　毅啓
 - **所属**: 北九州市立大学　地域創生学群
 - **連絡先**: Researchmap https://researchmap.jp/s-takeharu
+- **アプリ紹介Webサイト**：https://sider.ai/ja/agents/web-creator/share/69c360301946bb370a34548f
 
 ## 📝 引用について
 研究や論文で本アプリを使用された場合は、以下のように引用していただけると幸いです。
