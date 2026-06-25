@@ -8,10 +8,10 @@ python-docx
 pypdf
 pyvis
 scikit-learn
+scipy
 asari
+plotly
 openpyxl
 tabulate
-plotly
 xlsxwriter
 openai
-scipy
