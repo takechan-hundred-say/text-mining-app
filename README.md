@@ -67,7 +67,7 @@
 - **アプリ紹介Webサイト**：https://sider.ai/ja/agents/web-creator/share/69c360301946bb370a34548f
 
 ## 📝 引用について
-研究や論文で本アプリを使用された場合は、以下のように引用していただけると幸いです。
-> 坂本毅啓（2026）「社会福祉領域における完全ローカル型計量テキスト分析アプリの開発と活用可能性　――学生・実践者の質的研究を支援する試み――」『地域ケアリング』北隆館、28(5)、P.68～P.72。
-> 坂本毅啓 (2026)「計量テキスト分析ツール (text-mining-app)」（GitHub repository: https://github.com/takechan-hundred-say/text-mining-app.git、閲覧日）。
+研究や論文で本アプリを使用された場合は、以下のいずれかを引用していただけると幸いです。
+> * 坂本毅啓（2026）「社会福祉領域における完全ローカル型計量テキスト分析アプリの開発と活用可能性　――学生・実践者の質的研究を支援する試み――」『地域ケアリング』北隆館、28(5)、P.68～P.72。
+> * 坂本毅啓 (2026)「計量テキスト分析ツール (text-mining-app)」（GitHub repository: https://github.com/takechan-hundred-say/text-mining-app.git、閲覧日）。
 
