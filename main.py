@@ -11,7 +11,7 @@ from datetime import datetime
 
 from app.config import get_project_root, find_mecab_path, find_r_path
 from app.utils.text_io import load_synonym_dict, extract_text, create_zip_data
-from app.utils.tokenize import create_user_dict_file, analyze_text
+from app.utils.tokenize import create_user_dict_file, analyze_text, parse_compound_words
 from app.analysis.stats import draw_descriptive_stats
 from app.analysis.ngram_tfidf import draw_ngram, draw_tfidf_chart
 from app.analysis.wordcloud import draw_wordcloud
@@ -25,6 +25,7 @@ from app.analysis.process_flow import (
     draw_word_transition_line, draw_word_transition_bubble, draw_word_transition_sankey,
     label_word_state, export_flow_analysis_to_excel
 )
+from app.analysis.dependency import draw_dependency_analysis
 from app.r_bridge.r_runner import run_r_script, draw_frequency_chart_r
 
 st.set_page_config(page_title="計量テキスト分析ツール", layout="wide")
@@ -53,22 +54,239 @@ st.markdown("""
 
 with st.sidebar:
     st.title("ナビゲーション")
-    page_selection = st.radio("画面を選択してください", ["📊 分析ツール本体", "📖 使い方・機能紹介"])
+    page_selection = st.radio("画面を選択してください", ["📊 分析ツール本体", "📖 使い方・機能紹介", "📄 ライセンス・パッケージ"])
     st.markdown("---")
 
 if page_selection == "📖 使い方・機能紹介":
     st.title("📖 使い方・機能紹介")
+    st.markdown("## このアプリについて")
+    st.markdown("テキストデータ（自由記述・アンケート・論文など）をアップロードするだけで、形態素解析からグラフ・統計までを自動で行う計量テキスト分析ツールです。")
+    st.markdown("---")
+    st.markdown("## 基本の流れ")
     st.markdown("""
-    ### このアプリについて
-    このツールは、テキストデータを簡単に計量テキスト分析するためのアプリです。
-    ### 分析の進め方
-    1. **ファイルの読み込み**: 左側のメニューから、分析したいファイル（txt, csv, pdfなど）をアップロードします。
-    2. **品詞の選択**: 抽出したい品詞（名詞、動詞など）を選びます。
-    3. **分析実行**: 条件を設定すると、自動的に抽出とグラフ化が行われます。
-    ### 各機能の紹介
-    * **共起ネットワーク**: 一緒に使われやすい単語同士を線で結んだ図です。
-    * **感情分析**: 文脈がポジティブかネガティブかをAIが判定します。
+1. **ファイルを読み込む** — txt / csv / xlsx / docx / pdf に対応
+2. **形態素解析エンジンを選ぶ** — Janome（標準）, MeCab+UniDic（高精度）, Sudachi
+3. **抽出する品詞を選ぶ** — 名詞・動詞・形容詞・副詞から選択
+4. **必要に応じて設定** — 複合語定義・ストップワード・同義語辞書
+5. **分析実行** — 自動で全グラフ・集計表が生成される
     """)
+    st.markdown("---")
+    st.markdown("## 各機能の使い方")
+    with st.expander("📊 記述統計", expanded=False):
+        st.markdown("""
+テキスト全体の総文字数・総単語数・異なり語数を表示します。
+品詞ごとの出現回数と割合を円グラフで確認できます。
+
+**使い方**: ファイルを読み込めば自動表示されます。特別な操作は不要です。
+        """)
+    with st.expander("📋 データ表", expanded=False):
+        st.markdown("""
+抽出された単語の一覧を出現頻度順に表示します。表示件数はスライダーで変更可能です。
+Excel / CSV 形式で全データをダウンロードできます。
+
+**使い方**: ファイルを読み込めば自動表示。「表示する語句の数」スライダーで調整。
+        """)
+    with st.expander("📈 出現頻度（Rグラフ）", expanded=False):
+        st.markdown("""
+頻出単語を棒グラフで可視化します。R（R 4.x + ggplot2）がインストールされている場合は高品質なグラフが生成されます。
+
+**使い方**: ファイルを読み込めば自動表示。上位30語が表示されます。
+        """)
+    with st.expander("👥 属性データ", expanded=False):
+        st.markdown("""
+CSV／Excelに属性データ（年代・性別など）が含まれている場合、その分布を確認できます。
+数値データはヒストグラム、カテゴリデータは棒グラフで表示します。
+
+**使い方**: CSV読み込み時に「属性データの列」を選択すると自動表示。
+        """)
+    with st.expander("🔀 クロス集計・コレスポンデンス分析", expanded=False):
+        st.markdown("""
+属性（年代・性別など）ごとに頻出単語の出現傾向をクロス集計します。
+さらにコレスポンデンス分析（対応分析）で、属性と単語の関係をマップ上に可視化できます。
+
+**使い方**: 属性データを含むCSVを読み込み → 比較したい属性を選択 → 集計表とマップが自動作成。
+Python版（デフォルト）とR版（FactoMineR）を選択可能。
+        """)
+    with st.expander("🔗 係り受け解析（GINZA）", expanded=False):
+        st.markdown("""
+文節・句単位の係り受け関係（どの単語がどの単語に係るか）を解析します。
+結果はツリー表示・一覧表・グラフの3形式で確認できます。
+
+**使い方**: 「▶ 係り受け解析を実行」ボタンを押す。解析する文数（1〜50）を事前に設定可能。
+GINZA（spaCy）がインストールされている必要があります。
+        """)
+    with st.expander("🔗 N-gram（連続2単語）", expanded=False):
+        st.markdown("""
+連続して使われやすい2単語の組み合わせ（バイグラム）を抽出し、頻度順に表示します。
+文章の「言い回しのクセ」を発見するのに役立ちます。
+
+**使い方**: ファイルを読み込めば自動表示。上位件数はスライダーで調整。
+        """)
+    with st.expander("☁️ ワードクラウド", expanded=False):
+        st.markdown("""
+出現頻度が高い単語ほど大きく表示される雲のようなグラフです。
+直感的にテキストの主題を把握できます。
+
+**使い方**: ファイルを読み込めば自動表示。PNG画像としてダウンロード可能。
+        """)
+    with st.expander("🕸️ 共起ネットワーク", expanded=False):
+        st.markdown("""
+一緒に使われやすい単語同士を線で結んだネットワーク図です。
+線が太いほど強い共起関係を示します。動的操作可能なHTML版と静止画の両方をダウンロードできます。
+
+**使い方**: ファイルを読み込めば自動表示。「表示する単語数」「共起回数の下限」をスライダーで調整可能。
+        """)
+    with st.expander("🌟 TF-IDF", expanded=False):
+        st.markdown("""
+単なる出現回数ではなく、「そのテキストに特徴的な重要キーワード」をTF-IDFスコアで抽出します。
+複数の文書を比較する際に特に有効です。
+
+**使い方**: ファイルを読み込めば自動表示。上位20語が棒グラフで表示されます。
+        """)
+    with st.expander("😊 感情分析", expanded=False):
+        st.markdown("""
+各文の感情をポジティブ／ネガティブに判定します。東北大学評価極性辞書を使用。
+全体の割合（円グラフ）と、文章の展開に伴う感情スコアの推移（折れ線グラフ）を表示します。
+
+**使い方**: ファイルを読み込めば自動表示。dicフォルダに極性辞書（pn.csv.m3.120408.trim）が必要です。
+属性データがある場合は「ケース別感情分析」も利用できます。
+        """)
+    with st.expander("🔍 KWIC（文脈抽出）", expanded=False):
+        st.markdown("""
+特定の単語がテキストの中でどのような文脈で使われているかを、前後の文章ごと表示します。
+頻出語リストから選択するか、直接入力して検索できます。
+
+**使い方**: 頻出語トップ100から単語を選択、または任意の単語を入力。マッチした文が一覧表示され、CSVダウンロードも可能。
+        """)
+    with st.expander("🌳 クラスター分析", expanded=False):
+        st.markdown("""
+単語同士が「どのくらい同じ文脈で使われているか」を計算し、グループ化します。
+樹形図（階層型）と散布図（K-means）の2種類から選択可能です。
+
+**使い方**: 分析単位（段落／一文／ファイル全体／10語区切り）を選択 → 上位単語数を設定 → 自動計算。
+        """)
+    with st.expander("🔄 プロセスフロー（語句推移分析）", expanded=False):
+        st.markdown("""
+テキストを複数の段階（例：初期・中盤・終盤）に自動分割し、各段階での語句の出現推移を分析します。
+折れ線グラフ・バブルチャート・クロス集計表・カイ二乗検定までを一括出力。
+
+**使い方**: 段階数（2〜10）を設定 → 対象語句を選択（頻出TOP Nまたは任意入力） → 「分析を実行」。
+        """)
+    with st.expander("🤖 AI分析（LM Studio）", expanded=False):
+        st.markdown("""
+ローカルで起動したLM StudioのLLMと連携し、テキストの要約・分析を実行できます。
+テキストが長い場合はファイル経由（文字数制限なし）でLM StudioのGUIに渡す方式もサポート。
+
+**使い方**: LM StudioでLocal Server（ポート1234）を起動 → プロンプトを入力 → 「AIで要約を実行する」。
+        """)
+    with st.expander("✨ AIアフターコーディング", expanded=False):
+        st.markdown("""
+頻出単語のリストをLLMに渡し、表記ゆれや同義語を自動でグルーピング。
+出力されたCSVはそのまま「同義語・ゆらぎ統一辞書」として読み込ませて分析に利用できます。
+
+**使い方**: 上位単語数を設定（10〜500） → 「AIで辞書を作成する」 → 結果をCSVでダウンロード。
+        """)
+    st.markdown("---")
+    st.markdown("## 補助機能")
+    with st.expander("複合語（1語として扱う語句）の定義", expanded=False):
+        st.markdown("""
+「生活保護」のように、形態素解析では分割されてしまう複合語を1語として扱うよう指定できます。
+3つの方法から選択可能：
+- **画面上で直接入力**: テキストエリアに改行区切りで入力
+- **定義ファイルを読み込み**: 事前に作成したtxt／csvファイルをアップロード
+- **生成AI用プロンプト作成**: ChatGPT等に渡すプロンプトを自動生成
+        """)
+    with st.expander("ストップワード（除外設定）", expanded=False):
+        st.markdown("""
+集計結果から除外したい単語を指定できます。デフォルトでは「する」「ある」「いる」などが設定済み。
+テキストエリアへの直接入力またはファイルのアップロードで追加可能です。
+        """)
+    with st.expander("同義語・ゆらぎ統一辞書", expanded=False):
+        st.markdown("""
+「行く」「いける」「通う」などを同じ「行く」にまとめる辞書機能。
+CSVファイル（1行目: 元の単語, 2行目: 統一後の単語）をアップロードして使用します。
+        """)
+    with st.expander("💾 プロジェクトの保存／復元", expanded=False):
+        st.markdown("""
+分析中のテキストや属性データを.pklファイルとして保存し、後から復元できます。
+サイドバー下部の「プロジェクトを保存」からダウンロード。「プロジェクトの復元」からアップロードして再開。
+        """)
+
+elif page_selection == "📄 ライセンス・パッケージ":
+    st.title("📄 ライセンス・パッケージ")
+    st.markdown("---")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.markdown("**作成者**")
+    with col2:
+        st.markdown("Takeharu Sakamoto @The University of Kitakyushu")
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.markdown("**バージョン**")
+    with col2:
+        st.markdown("Ver.1.0（2026-06-25）")
+    st.markdown("---")
+    with st.expander("📜 MIT ライセンス", expanded=True):
+        st.markdown("""
+MIT License
+
+Copyright (c) 2026 Takeharu Sakamoto
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+        """)
+    st.markdown("---")
+    with st.expander("🐍 Python パッケージ一覧", expanded=True):
+        st.markdown("requirements.txt に記載されているパッケージ：")
+        py_packages = [
+            ("streamlit", "データ可視化ダッシュボード"),
+            ("pandas", "データ操作・集計"),
+            ("janome", "形態素解析（標準エンジン）"),
+            ("mecab-python3", "形態素解析（MeCab連携）"),
+            ("unidic-lite", "MeCab用辞書（UniDic）"),
+            ("sudachipy", "Sudachi形態素解析"),
+            ("sudachidict-core", "Sudachi用辞書"),
+            ("ginza", "係り受け解析（GINZA）"),
+            ("spacy", "自然言語処理フレームワーク"),
+            ("matplotlib", "グラフ描画"),
+            ("wordcloud", "ワードクラウド生成"),
+            ("networkx", "ネットワークグラフ解析"),
+            ("pyvis", "共起ネットワーク可視化"),
+            ("scikit-learn", "機械学習（TF-IDF, PCA, KMeans）"),
+            ("scipy", "統計検定・階層的クラスタリング"),
+            ("plotly", "インタラクティブグラフ"),
+            ("openpyxl", "Excel入出力"),
+            ("openai", "LM Studio / AI要約連携"),
+            ("pyknp", "KNP連携（コード保持用）"),
+        ]
+        py_df = pd.DataFrame(py_packages, columns=["パッケージ名", "用途"])
+        st.dataframe(py_df, use_container_width=True)
+    st.markdown("---")
+    with st.expander("📦 R パッケージ一覧", expanded=True):
+        st.markdown("R連携機能で利用するパッケージ：")
+        r_packages = [
+            ("RColorBrewer", "対応分析マップの色設定"),
+            ("ggplot2", "グラフ描画"),
+            ("FactoMineR", "コレスポンデンス分析"),
+            ("factoextra", "対応分析結果の可視化"),
+        ]
+        r_df = pd.DataFrame(r_packages, columns=["パッケージ名", "用途"])
+        st.dataframe(r_df, use_container_width=True)
 
 elif page_selection == "📊 分析ツール本体":
     st.markdown("""Ver.1.0(2026-06-25)""")
@@ -84,14 +302,35 @@ elif page_selection == "📊 分析ツール本体":
                 st.success(f"✅ R: {st.session_state.R_PATH}")
             else:
                 st.warning("⚠️ R: 見つかりません")
+            st.write("---")
+            st.caption("**形態素解析エンジン**")
+            try:
+                from pyknp.juman.juman import Juman
+                _ = Juman(jumanpp=True, multithreading=True)
+                st.success("✅ JUMAN++: 利用可能（※UI選択肢からは除外）")
+            except:
+                st.warning("⚠️ JUMAN++: 未インストール")
+            try:
+                from sudachipy import dictionary
+                _ = dictionary.Dictionary().create()
+                st.success("✅ Sudachi: 利用可能")
+            except:
+                st.warning("⚠️ Sudachi: 未インストール")
+            st.caption("**係り受け解析エンジン**")
+            try:
+                import spacy
+                _ = spacy.load("ja_ginza")
+                st.success("✅ GINZA: 利用可能")
+            except:
+                st.warning("⚠️ GINZA: 未インストール（`pip install ginza ja_ginza` が必要）")
 
         st.markdown("---")
 
         st.header("0. 形態素解析エンジン")
         analyzer_choice = st.radio(
             "使用するエンジンを選択",
-            ("Janome（標準・推奨）", "MeCab + UniDic（高精度）"),
-            help="MeCabはインストール済みの場合のみ選択できます。"
+            ("Janome（標準・推奨）", "MeCab + UniDic（高精度）", "Sudachi"),
+            help="各エンジンはインストール済みの場合のみ選択できます。"
         )
 
         if analyzer_choice == "MeCab + UniDic（高精度）":
@@ -107,6 +346,16 @@ elif page_selection == "📊 分析ツール本体":
                 st.error("❌ MeCabがインストールされていません")
                 st.info("https://taku910.github.io/mecab/#download")
                 analyzer_choice = "Janome（標準・推奨）"
+        elif analyzer_choice == "Sudachi":
+            try:
+                from sudachipy import dictionary
+                _ = dictionary.Dictionary().create()
+                st.success("✅ Sudachi 接続確認済み")
+            except ImportError:
+                st.error("❌ sudachipy がインストールされていません")
+                st.info("`pip install sudachipy sudachidict_core` を実行してください。")
+            except Exception as e:
+                st.error(f"❌ Sudachi が使用できません: {e}")
 
         st.markdown("---")
         st.header("1. 抽出する品詞の選択")
@@ -264,6 +513,7 @@ elif page_selection == "📊 分析ツール本体":
                     with st.spinner("⏳ テキストを読み込み、形態素解析を行っています..."):
                         custom_dict_content = custom_dict_file.read().decode('utf-8') if custom_dict_file else None
                         stop_words_content = stop_words_file.read().decode('utf-8') if stop_words_file else None
+                        compound_words = parse_compound_words(option, custom_words_text, custom_dict_content)
 
                         df_result, sentences_words = analyze_text(
                             text, option, custom_words_text, custom_dict_content,
@@ -277,8 +527,8 @@ elif page_selection == "📊 分析ツール本体":
                         with st.spinner("📊 グラフやネットワーク図を生成しています..."):
                             st.markdown("---")
                             st.header("1. 基本項目")
-                            tab0, tab1, tab2, tab_meta, tab_cross = st.tabs([
-                                "📊 記述統計", "📋 データ表", "📈 出現頻度", "👥 属性データ", "🔀 クロス集計"
+                            tab0, tab1, tab2, tab_meta, tab_cross, tab_dep = st.tabs([
+                                "📊 記述統計", "📋 データ表", "📈 出現頻度", "👥 属性データ", "🔀 クロス集計", "🔗 係り受け解析"
                             ])
 
                             with tab0:
@@ -326,9 +576,12 @@ elif page_selection == "📊 分析ツール本体":
                                     stopwords = set([w.strip() for w in stop_words_text.replace('\n', ',').split(',') if w.strip()])
                                     if stop_words_content:
                                         stopwords.update([w.strip() for w in stop_words_content.replace('\n', ',').split(',') if w.strip()])
-                                    draw_crosstab_and_ca(st.session_state['df_meta'], st.session_state['text_col'], st.session_state['meta_cols'], target_pos, synonym_dict, stopwords)
+                                    draw_crosstab_and_ca(st.session_state['df_meta'], st.session_state['text_col'], st.session_state['meta_cols'], target_pos, synonym_dict, stopwords, compound_words=compound_words)
                                 else:
                                     st.info("属性データを含むファイル（Excel/CSV）を読み込むと利用できます。")
+
+                            with tab_dep:
+                                draw_dependency_analysis(text)
 
                             st.markdown("---")
                             st.header("2. 応用項目")
@@ -365,7 +618,7 @@ elif page_selection == "📊 分析ツール本体":
                                 stopwords = set([w.strip() for w in stop_words_text.replace('\n', ',').split(',') if w.strip()])
                                 if stop_words_content:
                                     stopwords.update([w.strip() for w in stop_words_content.replace('\n', ',').split(',') if w.strip()])
-                                draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords)
+                                draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords, compound_words=compound_words)
 
                             EMOTION_COGNITIVE_WORDS = [
                                 "怖い", "こわい", "不安", "楽しい", "嬉しい", "つらい", "辛い",
@@ -427,7 +680,8 @@ elif page_selection == "📊 分析ツール本体":
                                                     stage_text,
                                                     synonym_dict=synonym_dict,
                                                     stopwords=set([w.strip() for w in stop_words_text.replace('\n', ',').split(',') if w.strip()]),
-                                                    target_pos=target_pos
+                                                    target_pos=target_pos,
+                                                    compound_words=compound_words
                                                 )
                                                 stage_counts[stage_name] = word_counter
 

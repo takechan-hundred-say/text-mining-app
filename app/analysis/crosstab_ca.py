@@ -9,6 +9,7 @@ from collections import Counter
 from sklearn.decomposition import TruncatedSVD
 import numpy as np
 from app.r_bridge.r_runner import run_r_script
+from app.utils.tokenize import create_user_dict_file
 
 
 def analyze_metadata(df, meta_cols):
@@ -42,7 +43,7 @@ def analyze_metadata(df, meta_cols):
         st.markdown("---")
 
 
-def draw_crosstab_and_ca(df, text_col, meta_cols, target_pos, synonym_dict, stopwords):
+def draw_crosstab_and_ca(df, text_col, meta_cols, target_pos, synonym_dict, stopwords, compound_words=None):
     st.write("### 🔀 属性別のクロス集計・コレスポンデンス分析")
     if not meta_cols:
         st.info("ファイル読み込み時に属性データ（メタデータ）の列が選択されていません。"); return
@@ -52,7 +53,13 @@ def draw_crosstab_and_ca(df, text_col, meta_cols, target_pos, synonym_dict, stop
     with col2:
         top_n = st.slider("集計に含める上位単語数:", 10, 100, 30, step=10, key="crosstab_slider")
     with st.spinner("クロス集計表とマップを作成中..."):
-        t = Tokenizer(); all_rows_words = []
+        temp_dict_path = None
+        if compound_words:
+            temp_dict_path = create_user_dict_file(compound_words)
+            t = Tokenizer(udic=temp_dict_path, udic_enc='utf8', udic_type='ipadic')
+        else:
+            t = Tokenizer()
+        all_rows_words = []
         for idx, row in df.iterrows():
             text = str(row[text_col])
             if pd.isna(text) or text.strip() == "":
@@ -120,6 +127,8 @@ def draw_crosstab_and_ca(df, text_col, meta_cols, target_pos, synonym_dict, stop
                 st.download_button("🖼️ マップをPNGで保存", data=buf_ca.getvalue(), file_name=f"correspondence_map_{selected_meta}.png", mime="image/png")
             except Exception as e:
                 st.error(f"コレスポンデンス分析の計算中にエラー: {e}")
+        if temp_dict_path and os.path.exists(temp_dict_path):
+            os.remove(temp_dict_path)
 
 
 def draw_ca_with_r(df_crosstab, selected_meta, tmpdir):

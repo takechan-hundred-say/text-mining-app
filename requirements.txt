@@ -15,3 +15,9 @@ openpyxl
 tabulate
 xlsxwriter
 openai
+sudachipy
+sudachidict_core
+pyknp
+mecab-python3
+ginza
+ja_ginza

@@ -1,9 +1,11 @@
 import io
+import os
 import streamlit as st
 import pandas as pd
 from janome.tokenizer import Tokenizer
 from collections import Counter, defaultdict
 from datetime import datetime
+from app.utils.tokenize import create_user_dict_file
 
 
 def draw_sankey_diagram(stage_config, stage_texts, df_heatmap):
@@ -28,21 +30,30 @@ def draw_sankey_diagram(stage_config, stage_texts, df_heatmap):
     st.plotly_chart(fig, use_container_width=True); return fig
 
 
-def create_heatmap_data(stage_config, stage_texts, categories):
+def create_heatmap_data(stage_config, stage_texts, categories, compound_words=None):
     stages = [config[1]["name"] for config in sorted(stage_config.items(), key=lambda x: x[0])]
     heatmap_data = {stage: {} for stage in stages}
-    tokenizer = Tokenizer()
-    for stage_name, text in stage_texts.items():
-        if not text.strip():
-            for cat in categories: heatmap_data[stage_name][cat] = 0; continue
-        analyzed_words = []
-        for token in tokenizer.tokenize(text):
-            pos = token.part_of_speech.split(',')[0]; base_form = token.base_form if token.base_form != '*' else token.surface
-            if pos == '名詞': analyzed_words.append(base_form)
-        category_counts = {cat: 0 for cat in categories}
-        for word in analyzed_words:
-            if word in categories: category_counts[word] += 1
-        for cat in categories: heatmap_data[stage_name][cat] = category_counts[cat]
+    temp_dict_path = None
+    if compound_words:
+        temp_dict_path = create_user_dict_file(compound_words)
+        tokenizer = Tokenizer(udic=temp_dict_path, udic_enc='utf8', udic_type='ipadic')
+    else:
+        tokenizer = Tokenizer()
+    try:
+        for stage_name, text in stage_texts.items():
+            if not text.strip():
+                for cat in categories: heatmap_data[stage_name][cat] = 0; continue
+            analyzed_words = []
+            for token in tokenizer.tokenize(text):
+                pos = token.part_of_speech.split(',')[0]; base_form = token.base_form if token.base_form != '*' else token.surface
+                if pos == '名詞': analyzed_words.append(base_form)
+            category_counts = {cat: 0 for cat in categories}
+            for word in analyzed_words:
+                if word in categories: category_counts[word] += 1
+            for cat in categories: heatmap_data[stage_name][cat] = category_counts[cat]
+    finally:
+        if temp_dict_path and os.path.exists(temp_dict_path):
+            os.remove(temp_dict_path)
     df_heatmap = pd.DataFrame(heatmap_data).fillna(0).astype(int)
     return df_heatmap
 
@@ -147,20 +158,30 @@ def draw_bubble_heatmap(df_heatmap, categories, color_mode, normalization_mode):
     st.plotly_chart(fig, use_container_width=True); return fig, df_heatmap, df_normalized
 
 
-def count_words_with_morphology(text, synonym_dict=None, stopwords=None, target_pos=None, analyzer_choice="Janome（標準・推奨）"):
+def count_words_with_morphology(text, synonym_dict=None, stopwords=None, target_pos=None, analyzer_choice="Janome（標準・推奨）", compound_words=None):
     if synonym_dict is None: synonym_dict = {}
     if stopwords is None: stopwords = set()
     if target_pos is None: target_pos = ["名詞","動詞","形容詞"]
     if not text or not text.strip(): return Counter()
-    tokenizer = Tokenizer(); words = []
-    for token in tokenizer.tokenize(text):
-        pos = token.part_of_speech.split(',')[0]
-        if pos not in target_pos: continue
-        base_form = token.base_form if token.base_form != '*' else token.surface
-        base_form = synonym_dict.get(base_form, base_form)
-        if base_form in stopwords: continue
-        if len(base_form) < 2: continue
-        words.append(base_form)
+    temp_dict_path = None
+    if compound_words:
+        temp_dict_path = create_user_dict_file(compound_words)
+        tokenizer = Tokenizer(udic=temp_dict_path, udic_enc='utf8', udic_type='ipadic')
+    else:
+        tokenizer = Tokenizer()
+    words = []
+    try:
+        for token in tokenizer.tokenize(text):
+            pos = token.part_of_speech.split(',')[0]
+            if pos not in target_pos: continue
+            base_form = token.base_form if token.base_form != '*' else token.surface
+            base_form = synonym_dict.get(base_form, base_form)
+            if base_form in stopwords: continue
+            if len(base_form) < 2: continue
+            words.append(base_form)
+    finally:
+        if temp_dict_path and os.path.exists(temp_dict_path):
+            os.remove(temp_dict_path)
     return Counter(words)
 
 
@@ -202,7 +223,7 @@ def label_word_state(freq, high_threshold=3):
     else: return "高頻度"
 
 
-def build_word_transition_by_stages(text, num_stages, top_n_words, synonym_dict=None, stopwords=None, target_pos=None, stage_names_custom=None):
+def build_word_transition_by_stages(text, num_stages, top_n_words, synonym_dict=None, stopwords=None, target_pos=None, stage_names_custom=None, compound_words=None):
     if synonym_dict is None: synonym_dict = {}
     if stopwords is None: stopwords = set()
     if target_pos is None: target_pos = ["名詞"]
@@ -213,7 +234,7 @@ def build_word_transition_by_stages(text, num_stages, top_n_words, synonym_dict=
         stage_names = stage_names_custom[:num_stages]
     stage_counts = {}
     for stage_name, stage_text in zip(stage_names, stages_text_list):
-        stage_counts[stage_name] = count_words_with_morphology(stage_text, synonym_dict=synonym_dict, stopwords=stopwords, target_pos=target_pos)
+        stage_counts[stage_name] = count_words_with_morphology(stage_text, synonym_dict=synonym_dict, stopwords=stopwords, target_pos=target_pos, compound_words=compound_words)
     total_counter = Counter()
     for counts in stage_counts.values(): total_counter.update(counts)
     top_words = [w for w, _ in total_counter.most_common(top_n_words)]

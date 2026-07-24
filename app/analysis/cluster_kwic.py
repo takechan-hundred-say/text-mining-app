@@ -1,4 +1,5 @@
 import io
+import os
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,9 +8,10 @@ from sklearn.feature_extraction.text import CountVectorizer
 from scipy.cluster.hierarchy import linkage, dendrogram
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from app.utils.tokenize import create_user_dict_file
 
 
-def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords):
+def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords, compound_words=None):
     st.write("### 🌳/📍 クラスター分析（単語のグループ化）")
     st.write("単語同士が「どのくらい同じ文脈で使われているか」を計算し、グループ化します。")
     col1, col2, col3 = st.columns(3)
@@ -22,7 +24,12 @@ def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords):
     if plot_type == "散布図（K-means）":
         n_clusters = st.number_input("クラスター数", min_value=2, max_value=10, value=3)
     with st.spinner("テキストを分割し、クラスターを計算中..."):
-        t = Tokenizer()
+        temp_dict_path = None
+        if compound_words:
+            temp_dict_path = create_user_dict_file(compound_words)
+            t = Tokenizer(udic=temp_dict_path, udic_enc='utf8', udic_type='ipadic')
+        else:
+            t = Tokenizer()
         docs_words = []
         if unit_option == "単語単位（10語区切り）":
             all_valid_words = []
@@ -79,6 +86,8 @@ def draw_cluster_analysis(text, df_result, target_pos, synonym_dict, stopwords):
         st.pyplot(fig_cluster)
         buf_cluster = io.BytesIO(); fig_cluster.savefig(buf_cluster, format="png", dpi=300, bbox_inches='tight')
         st.download_button("🖼️ グラフをPNGで保存", data=buf_cluster.getvalue(), file_name=f"cluster_{'dendrogram' if plot_type=='樹形図（階層型）' else 'scatter'}.png", mime="image/png")
+        if temp_dict_path and os.path.exists(temp_dict_path):
+            os.remove(temp_dict_path)
 
 
 def draw_kwic(text, df_result, synonym_dict=None, tokenizer=None):
@@ -98,15 +107,19 @@ def draw_kwic(text, df_result, synonym_dict=None, tokenizer=None):
     if target_word:
         sentences = [s.strip() for s in text.replace('\n', '。').split('。') if s.strip()]
         matched_sentences = []
+        search_words = [target_word]
+        if synonym_dict:
+            for key, value in synonym_dict.items():
+                if value == target_word:
+                    search_words.append(key)
         for sentence in sentences:
-            if not sentence.strip(): continue
+            if not sentence.strip():
+                continue
             tokens = [token.base_form for token in tokenizer.tokenize(sentence)]
             tokens_normalized = [synonym_dict.get(token, token) for token in tokens]
-            search_words = [target_word]
-            if synonym_dict:
-                for key, value in synonym_dict.items():
-                    if value == target_word: search_words.append(key)
-            if any(word in tokens_normalized for word in search_words):
+            in_text = any(word in sentence for word in search_words)
+            in_tokens = any(word in tokens_normalized for word in search_words)
+            if in_text or in_tokens:
                 matched_sentences.append(sentence + '。')
         if matched_sentences:
             st.success(f"「**{target_word}**」を含む文が **{len(matched_sentences)}件** 見つかりました。")
